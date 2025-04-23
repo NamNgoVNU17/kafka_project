@@ -3,78 +3,74 @@ from pymongo import MongoClient
 import json
 import logging
 import threading
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-#Kafka server
-
+# Kafka config from environment
 kafka_remote_config = {
-    'bootstrap.servers': '113.160.15.232:9094,113.160.15.232:9194,113.160.15.232:9294',
-    'group.id': 'ngohoainam_group',
+    'bootstrap.servers': os.getenv('KAFKA_REMOTE_BOOTSTRAP_SERVERS'),
+    'group.id': os.getenv('KAFKA_REMOTE_GROUP_ID'),
     'auto.offset.reset': 'earliest',
-    'security.protocol': 'SASL_PLAINTEXT',
-    'sasl.mechanism': 'PLAIN',
-    'sasl.username': 'kafka',
-    'sasl.password': 'UnigapKafka@2024'
+    'security.protocol': os.getenv('KAFKA_SECURITY_PROTOCOL'),
+    'sasl.mechanism': os.getenv('KAFKA_SASL_MECHANISM'),
+    'sasl.username': os.getenv('KAFKA_SASL_USERNAME'),
+    'sasl.password': os.getenv('KAFKA_SASL_PASSWORD')
 }
 
-# Local kafkak config
 local_kafka_config = {
-    'bootstrap.servers': 'localhost:9094,localhost:9194,localhost:9294',
-    'security.protocol': 'SASL_PLAINTEXT',
-    'sasl.mechanism': 'PLAIN',
-    'sasl.username': 'kafka',
-    'sasl.password': 'UnigapKafka@2024'
+    'bootstrap.servers': os.getenv('KAFKA_LOCAL_BOOTSTRAP_SERVERS'),
+    'security.protocol': os.getenv('KAFKA_SECURITY_PROTOCOL'),
+    'sasl.mechanism': os.getenv('KAFKA_SASL_MECHANISM'),
+    'sasl.username': os.getenv('KAFKA_SASL_USERNAME'),
+    'sasl.password': os.getenv('KAFKA_SASL_PASSWORD')
 }
 
-#Mongo config
-mongo_uri = "mongodb://localhost:27017"
-mongo_db_name = "kafka_data"
-mongo_collection_name = "product_view"
+# Mongo config from environment
+mongo_uri = os.getenv("MONGO_URI")
+mongo_db_name = os.getenv("MONGO_DB_NAME")
+mongo_collection_name = os.getenv("MONGO_COLLECTION_NAME")
 
-#Topic
+# Topics
+remote_topic = os.getenv("KAFKA_REMOTE_TOPIC")
+local_topic = os.getenv("KAFKA_LOCAL_TOPIC")
 
-remote_topic = "product_view"
-local_topic = "product_viewed"
-
-def create_remote_kafkaConsumer() :
-    try :
+def create_remote_kafkaConsumer():
+    try:
         consumer = Consumer(kafka_remote_config)
         consumer.subscribe([remote_topic])
         return consumer
-    except KafkaException as e :
-        logger.error(f"Failed to create remote consumer : {e}")
+    except KafkaException as e:
+        logger.error(f"Failed to create remote consumer: {e}")
         raise
 
-def creat_local_kafkaProducer() :
-    try :
+def create_local_kafkaProducer():
+    try:
         producer = Producer(local_kafka_config)
         return producer
-    except KafkaException as e :
-        logger.error((f"Faild to create local Producer: {e}"))
+    except KafkaException as e:
+        logger.error(f"Failed to create local Producer: {e}")
         raise
 
-def create_local_kafkaConsumer() :
-    try :
+def create_local_kafkaConsumer():
+    try:
         consumer = Consumer({
-            'bootstrap.servers': local_kafka_config['bootstrap.servers'],
-            'group.id': 'local_product_view_group',
-            'auto.offset.reset': 'earliest',
-            'security.protocol': local_kafka_config['security.protocol'],
-            'sasl.mechanism': local_kafka_config['sasl.mechanism'],
-            'sasl.username': local_kafka_config['sasl.username'],
-            'sasl.password': local_kafka_config['sasl.password']
+            **local_kafka_config,
+            'group.id': os.getenv('KAFKA_LOCAL_GROUP_ID'),
+            'auto.offset.reset': 'earliest'
         })
         consumer.subscribe([local_topic])
         return consumer
-    except KafkaException as e :
-        logger.error(f"Faild to create local Consumer : {e}")
+    except KafkaException as e:
+        logger.error(f"Failed to create local Consumer: {e}")
         raise
 
-def connect_mongodb() :
+def connect_mongodb():
     try:
-        client = MongoClient(mongo_uri)
+        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
         db = client[mongo_db_name]
         collection = db[mongo_collection_name]
         logger.info("Successfully connected to MongoDB")
@@ -83,7 +79,7 @@ def connect_mongodb() :
         logger.error(f"Failed to connect to MongoDB: {e}")
         raise
 
-def report_delivery(err, msg) :
+def report_delivery(err, msg):
     if err is not None:
         logger.error(f"Message delivery failed: {err}")
     else:
@@ -91,7 +87,7 @@ def report_delivery(err, msg) :
 
 def consume_remote_and_produce_local():
     consumer = create_remote_kafkaConsumer()
-    producer = creat_local_kafkaProducer()
+    producer = create_local_kafkaProducer()
 
     try:
         while True:
@@ -103,16 +99,13 @@ def consume_remote_and_produce_local():
                 continue
 
             message_value = msg.value().decode('utf-8')
-            # logger.info(f"Consumed message from remote {remote_topic}: {message_value}")
-
-            # Produce to local Kafka topic
+            logger.info(f"Forwarded message to local topic: {message_value}")
             producer.produce(
                 local_topic,
-                value=message_value.encode('utf-8')
-                # callback=report_deliveryS
+                value=message_value.encode('utf-8'),
+                callback=report_delivery
             )
             producer.poll(0)
-
     except KeyboardInterrupt:
         logger.info("Remote consumer interrupted")
     finally:
@@ -120,7 +113,6 @@ def consume_remote_and_produce_local():
         producer.flush()
 
 def consume_local_and_store_to_mongodb():
-
     consumer = create_local_kafkaConsumer()
     collection = connect_mongodb()
 
@@ -136,18 +128,19 @@ def consume_local_and_store_to_mongodb():
             message_value = msg.value().decode('utf-8')
             try:
                 data = json.loads(message_value)
-                collection.replace_one({'_id': data['_id']}, data, upsert=True)
-                logger.info(f"Stored message in MongoDB: {data}")
+                if '_id' in data:
+                    collection.replace_one({'_id': data['_id']}, data, upsert=True)
+                    logger.info(f"Stored message in MongoDB: {data}")
+                else:
+                    logger.warning(f"No _id in message, skipping: {data}")
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to decode JSON: {e}")
-                continue
-
     except KeyboardInterrupt:
         logger.info("Local consumer interrupted")
     finally:
         consumer.close()
 
-if __name__ == "__main__" :
+if __name__ == "__main__":
     remote_to_local_thread = threading.Thread(target=consume_remote_and_produce_local)
     local_to_mongodb_thread = threading.Thread(target=consume_local_and_store_to_mongodb)
 

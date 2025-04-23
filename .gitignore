@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Env file
+.env
+
+# Virtual environment
+venv/
+.env/
+env/
+ENV/
+
+# Log files
+logs/
+*.log
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# VSCode settings
+.vscode/
+
+# macOS junk
+.DS_Store
+
+# PyCharm
+.idea/
+
+# System files
+Thumbs.db
+
+# Docker files (nếu sử dụng Docker)
+*.pid
+*.tar
+*.db
+docker-compose.override.yml
